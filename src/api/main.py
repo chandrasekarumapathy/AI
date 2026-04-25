@@ -162,8 +162,10 @@ app.add_middleware(
 # Serve dashboard static files
 import os
 _dashboard_dir = os.path.join(os.path.dirname(__file__), "..", "..", "dashboard")
-if os.path.isdir(_dashboard_dir):
-    app.mount("/static", StaticFiles(directory=os.path.join(_dashboard_dir, "static")), name="static")
+_static_dir = os.path.join(_dashboard_dir, "static")
+os.makedirs(_static_dir, exist_ok=True)
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 # ── Dashboard route ───────────────────────────────────────────────────────────
