@@ -1,0 +1,130 @@
+agent:
+  name: "BigSleep-ASM"
+  version: "1.0.0"
+  scan_interval_seconds: 30
+  log_level: "INFO"
+
+proxy:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8080
+  ssl_intercept: true
+  ca_cert_path: "config/ca-cert.pem"
+  ca_key_path: "config/ca-key.pem"
+
+api:
+  host: "0.0.0.0"
+  port: 9000
+  cors_origins:
+    - "http://localhost:9000"
+    - "http://127.0.0.1:9000"
+
+database:
+  path: "data/bigsleep.db"
+
+dlp:
+  default_action: "block"  # block | alert | log
+  policies:
+    - name: "PII Protection"
+      enabled: true
+      categories: ["pii"]
+      severity_threshold: "medium"
+      action: "block"
+    - name: "Credential Protection"
+      enabled: true
+      categories: ["credentials"]
+      severity_threshold: "low"
+      action: "block"
+    - name: "Financial Data"
+      enabled: true
+      categories: ["financial"]
+      severity_threshold: "medium"
+      action: "block"
+    - name: "Source Code"
+      enabled: true
+      categories: ["source_code"]
+      severity_threshold: "medium"
+      action: "alert"
+
+llm_endpoints:
+  # LLM API endpoints to monitor/block
+  openai:
+    domains: ["api.openai.com", "openai.com"]
+    risk_level: "high"
+    monitor: true
+    block: false
+  anthropic:
+    domains: ["api.anthropic.com", "anthropic.com"]
+    risk_level: "high"
+    monitor: true
+    block: false
+  google_ai:
+    domains: ["generativelanguage.googleapis.com", "aiplatform.googleapis.com", "bard.google.com"]
+    risk_level: "high"
+    monitor: true
+    block: false
+  azure_openai:
+    domains: ["openai.azure.com", "*.openai.azure.com"]
+    risk_level: "high"
+    monitor: true
+    block: false
+  cohere:
+    domains: ["api.cohere.ai", "api.cohere.com"]
+    risk_level: "medium"
+    monitor: true
+    block: false
+  mistral:
+    domains: ["api.mistral.ai"]
+    risk_level: "medium"
+    monitor: true
+    block: false
+  huggingface:
+    domains: ["api-inference.huggingface.co", "huggingface.co"]
+    risk_level: "medium"
+    monitor: true
+    block: false
+  replicate:
+    domains: ["api.replicate.com"]
+    risk_level: "medium"
+    monitor: true
+    block: false
+  groq:
+    domains: ["api.groq.com"]
+    risk_level: "medium"
+    monitor: true
+    block: false
+  ollama:
+    domains: ["localhost"]
+    ports: [11434]
+    risk_level: "low"
+    monitor: true
+    block: false
+
+mcp_servers:
+  # Known MCP server patterns
+  local_ports: [3000, 3001, 8000, 8001, 8765, 9000, 9001]
+  process_patterns:
+    - "mcp-server"
+    - "mcp_server"
+    - "claude-desktop"
+    - "cursor"
+    - "copilot"
+
+agent_frameworks:
+  process_patterns:
+    - "langchain"
+    - "autogen"
+    - "crewai"
+    - "agents"
+    - "smolagents"
+    - "openagents"
+
+asm:
+  scan_targets:
+    - local_processes: true
+    - local_ports: true
+    - network_connections: true
+    - installed_software: true
+    - browser_extensions: true
+    - environment_variables: true
+    - registry_ai_keys: true  # Windows only

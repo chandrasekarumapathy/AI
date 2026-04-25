@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BigSleep — AI Attack Surface Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --accent: #6366f1;
+      --danger: #ef4444;
+      --warn:   #f59e0b;
+      --ok:     #10b981;
+    }
+    body { background: #0f1117; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; }
+    .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 12px; }
+    .badge-critical { background:#7f1d1d; color:#fca5a5; }
+    .badge-high     { background:#7c2d12; color:#fdba74; }
+    .badge-medium   { background:#78350f; color:#fde68a; }
+    .badge-low      { background:#14532d; color:#86efac; }
+    .badge-block    { background:#7f1d1d; color:#fca5a5; }
+    .badge-alert    { background:#78350f; color:#fde68a; }
+    .badge-allow    { background:#14532d; color:#86efac; }
+    .badge-log      { background:#1e3a5f; color:#93c5fd; }
+    .risk-ring { width:120px; height:120px; }
+    .scrollbar::-webkit-scrollbar { width:4px; }
+    .scrollbar::-webkit-scrollbar-track { background:#1a1d27; }
+    .scrollbar::-webkit-scrollbar-thumb { background:#4b5563; border-radius:4px; }
+    .pulse-dot { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .slide-in { animation: slideIn .3s ease; }
+    @keyframes slideIn { from{transform:translateX(20px);opacity:0} to{transform:none;opacity:1} }
+    .tab-active { border-bottom: 2px solid var(--accent); color: #a5b4fc; }
+    .glow-red { box-shadow: 0 0 20px rgba(239,68,68,.3); }
+    .glow-amber { box-shadow: 0 0 20px rgba(245,158,11,.2); }
+    .tooltip { position:relative; }
+    .tooltip:hover .tt { display:block; }
+    .tt { display:none; position:absolute; bottom:110%; left:50%; transform:translateX(-50%);
+          background:#1e2130; border:1px solid #374151; padding:6px 10px; border-radius:6px;
+          font-size:12px; white-space:nowrap; z-index:50; }
+  </style>
+</head>
+<body class="min-h-screen p-4">
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header class="flex items-center justify-between mb-6">
+  <div class="flex items-center gap-3">
+    <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold text-lg">B</div>
+    <div>
+      <h1 class="text-xl font-bold text-white">BigSleep <span class="text-indigo-400">ASM</span></h1>
+      <p class="text-xs text-slate-500">AI Attack Surface Management &amp; DLP</p>
+    </div>
+  </div>
+  <div class="flex items-center gap-4">
+    <span id="ws-status" class="flex items-center gap-2 text-sm text-slate-400">
+      <span class="pulse-dot w-2 h-2 rounded-full bg-slate-500"></span> Connecting...
+    </span>
+    <span id="clock" class="text-sm text-slate-500 font-mono"></span>
+    <button onclick="triggerScan()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition">
+      Scan Now
+    </button>
+  </div>
+</header>
+
+<!-- ── KPI Row ──────────────────────────────────────────────────────────────── -->
+<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+  <div class="card p-4 col-span-1" id="kpi-risk">
+    <p class="text-xs text-slate-500 mb-1">ASM Risk Score</p>
+    <p class="text-3xl font-bold text-red-400" id="kpi-risk-val">—</p>
+    <p class="text-xs text-slate-600 mt-1">/100</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-slate-500 mb-1">Total Events</p>
+    <p class="text-3xl font-bold text-white" id="kpi-total">0</p>
+    <p class="text-xs text-slate-600 mt-1">all time</p>
+  </div>
+  <div class="card p-4 glow-red">
+    <p class="text-xs text-slate-500 mb-1">Blocked</p>
+    <p class="text-3xl font-bold text-red-400" id="kpi-blocked">0</p>
+    <p class="text-xs text-slate-600 mt-1">DLP violations</p>
+  </div>
+  <div class="card p-4 glow-amber">
+    <p class="text-xs text-slate-500 mb-1">Alerted</p>
+    <p class="text-3xl font-bold text-amber-400" id="kpi-alerted">0</p>
+    <p class="text-xs text-slate-600 mt-1">policy triggers</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-slate-500 mb-1">ASM Items</p>
+    <p class="text-3xl font-bold text-indigo-400" id="kpi-asm">0</p>
+    <p class="text-xs text-slate-600 mt-1">surface items</p>
+  </div>
+</div>
+
+<!-- ── Main Grid ────────────────────────────────────────────────────────────── -->
+<div class="grid grid-cols-12 gap-4">
+
+  <!-- Left: Charts -->
+  <div class="col-span-12 lg:col-span-8 space-y-4">
+
+    <!-- Activity chart -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-semibold text-white">DLP Events — Last 24 Hours</h2>
+        <span class="text-xs text-slate-500">blocked / alerted</span>
+      </div>
+      <canvas id="chart-activity" height="90"></canvas>
+    </div>
+
+    <!-- Tabs: DLP Events / Network / Processes -->
+    <div class="card">
+      <div class="flex border-b border-slate-700 px-4">
+        <button class="tab-btn py-3 px-4 text-sm font-medium text-slate-400 hover:text-white tab-active" data-tab="dlp">
+          DLP Events
+        </button>
+        <button class="tab-btn py-3 px-4 text-sm font-medium text-slate-400 hover:text-white" data-tab="net">
+          Network
+        </button>
+        <button class="tab-btn py-3 px-4 text-sm font-medium text-slate-400 hover:text-white" data-tab="proc">
+          Processes
+        </button>
+        <button class="tab-btn py-3 px-4 text-sm font-medium text-slate-400 hover:text-white" data-tab="asm">
+          ASM Surface
+        </button>
+      </div>
+
+      <!-- DLP Events table -->
+      <div id="tab-dlp" class="tab-panel p-4">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-slate-500 border-b border-slate-700">
+                <th class="pb-2 pr-3">Time</th>
+                <th class="pb-2 pr-3">Endpoint</th>
+                <th class="pb-2 pr-3">DLP Match</th>
+                <th class="pb-2 pr-3">Risk</th>
+                <th class="pb-2 pr-3">Action</th>
+                <th class="pb-2">Summary</th>
+              </tr>
+            </thead>
+            <tbody id="dlp-table-body" class="divide-y divide-slate-800">
+              <tr><td colspan="6" class="py-8 text-center text-slate-600">Loading events...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Network Events -->
+      <div id="tab-net" class="tab-panel p-4 hidden">
+        <div id="net-list" class="space-y-2 max-h-96 overflow-y-auto scrollbar">
+          <p class="text-slate-600 text-sm text-center py-8">No network events yet...</p>
+        </div>
+      </div>
+
+      <!-- Process Events -->
+      <div id="tab-proc" class="tab-panel p-4 hidden">
+        <div id="proc-list" class="space-y-2 max-h-96 overflow-y-auto scrollbar">
+          <p class="text-slate-600 text-sm text-center py-8">No process events yet...</p>
+        </div>
+      </div>
+
+      <!-- ASM Surface -->
+      <div id="tab-asm" class="tab-panel p-4 hidden">
+        <div id="asm-list" class="space-y-2 max-h-96 overflow-y-auto scrollbar">
+          <p class="text-slate-600 text-sm text-center py-8">Running initial scan...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Sidebar -->
+  <div class="col-span-12 lg:col-span-4 space-y-4">
+
+    <!-- Endpoint type breakdown -->
+    <div class="card p-4">
+      <h2 class="font-semibold text-white mb-4">Traffic by AI Type</h2>
+      <canvas id="chart-type" height="180"></canvas>
+    </div>
+
+    <!-- DLP Policies -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-semibold text-white">DLP Policies</h2>
+        <span class="text-xs text-slate-500" id="policy-count">0 active</span>
+      </div>
+      <div id="policy-list" class="space-y-2 max-h-72 overflow-y-auto scrollbar">
+        <p class="text-slate-600 text-sm">Loading policies...</p>
+      </div>
+    </div>
+
+    <!-- Live event feed -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-white">Live Feed</h2>
+        <span class="pulse-dot w-2 h-2 rounded-full bg-green-500"></span>
+      </div>
+      <div id="live-feed" class="space-y-2 max-h-60 overflow-y-auto scrollbar text-xs text-slate-400">
+        <p class="text-slate-600">Waiting for events...</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Inspect Modal ─────────────────────────────────────────────────────────── -->
+<div id="inspect-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden">
+  <div class="card w-full max-w-lg p-6">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="font-semibold text-white">Manual DLP Inspect</h3>
+      <button onclick="closeModal()" class="text-slate-500 hover:text-white">✕</button>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <label class="text-xs text-slate-400">URL</label>
+        <input id="insp-url" type="text" placeholder="https://api.openai.com/v1/chat/completions"
+               class="w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white" />
+      </div>
+      <div>
+        <label class="text-xs text-slate-400">Request Body (JSON or text)</label>
+        <textarea id="insp-body" rows="5" placeholder='{"messages":[{"role":"user","content":"..."}]}'
+                  class="w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white font-mono resize-none"></textarea>
+      </div>
+      <div>
+        <label class="text-xs text-slate-400">Source Process (optional)</label>
+        <input id="insp-proc" type="text" placeholder="python.exe"
+               class="w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white" />
+      </div>
+      <button onclick="runInspect()" class="w-full py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium">
+        Run Inspection
+      </button>
+      <div id="insp-result" class="hidden bg-slate-800 rounded-lg p-3 text-xs font-mono text-slate-300 whitespace-pre-wrap max-h-48 overflow-y-auto scrollbar"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Floating action button ────────────────────────────────────────────────── -->
+<button onclick="document.getElementById('inspect-modal').classList.remove('hidden')"
+        class="fixed bottom-6 right-6 w-12 h-12 bg-indigo-600 hover:bg-indigo-500 rounded-full flex items-center justify-center shadow-lg text-xl transition"
+        title="Manual DLP Inspect">
+  &#128269;
+</button>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const API = '';
+let ws = null;
+let dlpEvents = [];
+let netEvents = [];
+let procEvents = [];
+let asmItems  = [];
+let activityChart = null;
+let typeChart = null;
+let stats = { events_by_hour: Array(24).fill(0), events_by_type: {} };
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+function updateClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+function initCharts() {
+  const actCtx = document.getElementById('chart-activity').getContext('2d');
+  const hours = Array.from({length:24}, (_,i) => `${i}:00`);
+  activityChart = new Chart(actCtx, {
+    type: 'bar',
+    data: {
+      labels: hours,
+      datasets: [
+        { label:'Blocked', data: Array(24).fill(0), backgroundColor:'rgba(239,68,68,.7)', borderRadius:3 },
+        { label:'Alerted', data: Array(24).fill(0), backgroundColor:'rgba(245,158,11,.5)', borderRadius:3 },
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:true,
+      plugins:{ legend:{ labels:{ color:'#94a3b8', font:{size:11} } } },
+      scales:{
+        x:{ ticks:{color:'#475569',font:{size:10}}, grid:{color:'#1e2433'} },
+        y:{ ticks:{color:'#475569'}, grid:{color:'#1e2433'}, beginAtZero:true }
+      }
+    }
+  });
+
+  const typeCtx = document.getElementById('chart-type').getContext('2d');
+  typeChart = new Chart(typeCtx, {
+    type: 'doughnut',
+    data: {
+      labels: ['LLM API','Agent','MCP Server','AI Tool','Unknown'],
+      datasets:[{ data:[0,0,0,0,0],
+        backgroundColor:['#6366f1','#f59e0b','#ef4444','#10b981','#475569'],
+        borderWidth:0 }]
+    },
+    options:{
+      responsive:true, cutout:'70%',
+      plugins:{ legend:{ position:'bottom', labels:{ color:'#94a3b8', font:{size:11}, padding:10 } } }
+    }
+  });
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('ws-status').innerHTML =
+      '<span class="pulse-dot w-2 h-2 rounded-full bg-green-500"></span> Live';
+    addFeedItem('Connected to BigSleep agent', 'ok');
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'ping') return;
+    if (msg.type === 'dlp_event') handleDLPEvent(msg.data);
+    else if (msg.type === 'network_event') handleNetworkEvent(msg.data);
+    else if (msg.type === 'process_event') handleProcessEvent(msg.data);
+    else if (msg.type === 'asm_update') handleASMUpdate(msg.data);
+  };
+
+  ws.onclose = () => {
+    document.getElementById('ws-status').innerHTML =
+      '<span class="w-2 h-2 rounded-full bg-slate-500 inline-block"></span> Disconnected';
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+// ── Event handlers ────────────────────────────────────────────────────────────
+function handleDLPEvent(evt) {
+  dlpEvents.unshift(evt);
+  if (dlpEvents.length > 500) dlpEvents.pop();
+  renderDLPTable();
+  const level = evt.blocked ? 'block' : (evt.action === 'alert' ? 'warn' : 'ok');
+  addFeedItem(`${evt.blocked ? '🚫' : '⚠️'} ${evt.endpoint_name || evt.url} — ${evt.summary}`, level);
+  loadStats();
+}
+
+function handleNetworkEvent(evt) {
+  netEvents.unshift(evt);
+  if (netEvents.length > 200) netEvents.pop();
+  renderNetList();
+  addFeedItem(`Network: ${evt.signature_name} (${evt.remote_host}:${evt.remote_port})`, 'info');
+}
+
+function handleProcessEvent(evt) {
+  procEvents.unshift(evt);
+  if (procEvents.length > 200) procEvents.pop();
+  renderProcList();
+  addFeedItem(`Process ${evt.event_type}: ${evt.name} [${evt.category}]`, 'warn');
+}
+
+function handleASMUpdate(data) {
+  asmItems = data.items || [];
+  document.getElementById('kpi-asm').textContent = asmItems.length;
+  document.getElementById('kpi-risk-val').textContent = data.risk_score || 0;
+  renderASMList();
+  addFeedItem(`ASM scan: ${asmItems.length} items, risk=${data.risk_score}`, 'info');
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────────
+function badge(label, type) {
+  return `<span class="badge-${type} px-2 py-0.5 rounded text-xs font-medium">${label}</span>`;
+}
+
+function timeStr(ts) {
+  return new Date(ts * 1000).toLocaleTimeString();
+}
+
+function renderDLPTable() {
+  const tbody = document.getElementById('dlp-table-body');
+  if (!dlpEvents.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-slate-600">No events yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = dlpEvents.slice(0, 100).map(evt => {
+    const cats = (evt.dlp_matches || []).map(m => m.category).filter((v,i,a)=>a.indexOf(v)===i).join(', ');
+    return `<tr class="slide-in hover:bg-slate-800/50 transition text-sm">
+      <td class="py-2 pr-3 text-slate-500 font-mono text-xs whitespace-nowrap">${timeStr(evt.timestamp)}</td>
+      <td class="py-2 pr-3 max-w-[160px]">
+        <span class="text-indigo-300 truncate block">${escHtml(evt.endpoint_name || '—')}</span>
+        <span class="text-slate-600 text-xs truncate block">${escHtml(shortUrl(evt.url))}</span>
+      </td>
+      <td class="py-2 pr-3 text-slate-400 text-xs">${escHtml(cats || '—')}</td>
+      <td class="py-2 pr-3">${badge(evt.risk_level || 'low', evt.risk_level || 'low')}</td>
+      <td class="py-2 pr-3">${badge(evt.action || 'allow', evt.action || 'allow')}</td>
+      <td class="py-2 text-slate-500 text-xs max-w-[200px] truncate">${escHtml(evt.summary || '')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderNetList() {
+  const el = document.getElementById('net-list');
+  if (!netEvents.length) { el.innerHTML = '<p class="text-slate-600 text-sm text-center py-8">No network events.</p>'; return; }
+  el.innerHTML = netEvents.slice(0, 50).map(e =>
+    `<div class="flex items-center gap-3 py-2 border-b border-slate-800 text-xs">
+      <span class="text-slate-500 w-20 shrink-0">${timeStr(e.timestamp)}</span>
+      ${badge(e.risk_level, e.risk_level)}
+      <span class="text-indigo-300">${escHtml(e.signature_name)}</span>
+      <span class="text-slate-400">${escHtml(e.remote_host)}:${e.remote_port}</span>
+      <span class="text-slate-500 ml-auto">${escHtml(e.process_name || '—')}</span>
+    </div>`).join('');
+}
+
+function renderProcList() {
+  const el = document.getElementById('proc-list');
+  if (!procEvents.length) { el.innerHTML = '<p class="text-slate-600 text-sm text-center py-8">No process events.</p>'; return; }
+  el.innerHTML = procEvents.slice(0, 50).map(e =>
+    `<div class="flex items-center gap-3 py-2 border-b border-slate-800 text-xs">
+      <span class="text-slate-500 w-20 shrink-0">${timeStr(e.timestamp)}</span>
+      ${badge(e.risk_level, e.risk_level)}
+      <span class="text-amber-300 font-medium">${escHtml(e.name)}</span>
+      <span class="text-slate-500">[${escHtml(e.category)}]</span>
+      <span class="text-slate-600 ml-auto">PID ${e.pid}</span>
+    </div>`).join('');
+}
+
+function renderASMList() {
+  const el = document.getElementById('asm-list');
+  if (!asmItems.length) { el.innerHTML = '<p class="text-slate-600 text-sm text-center py-8">No ASM items found.</p>'; return; }
+  const typeIcon = { process:'⚙️', port:'🔌', software:'📦', env_var:'🔑', registry:'🗝️', extension:'🔧' };
+  el.innerHTML = asmItems.map(item =>
+    `<div class="card p-3 text-xs space-y-1">
+      <div class="flex items-center justify-between">
+        <span class="font-medium text-white">${typeIcon[item.item_type] || '▪️'} ${escHtml(item.name)}</span>
+        <div class="flex gap-2">
+          ${badge(item.endpoint_type.replace('_',' '), 'log')}
+          ${badge(item.risk_level, item.risk_level)}
+        </div>
+      </div>
+      <p class="text-slate-500">${escHtml(item.remediation)}</p>
+    </div>`).join('');
+}
+
+function renderPolicies(policies) {
+  const el = document.getElementById('policy-list');
+  const active = policies.filter(p => p.enabled).length;
+  document.getElementById('policy-count').textContent = `${active} active`;
+  el.innerHTML = policies.map(p =>
+    `<div class="flex items-center justify-between py-2 border-b border-slate-800 text-xs">
+      <div class="flex-1 min-w-0">
+        <span class="text-white font-medium">${escHtml(p.name)}</span>
+        <div class="flex gap-1 mt-1">
+          ${badge(p.action, p.action)}
+          <span class="text-slate-600">${p.severity_threshold}+</span>
+        </div>
+      </div>
+      <label class="relative inline-flex items-center cursor-pointer ml-2">
+        <input type="checkbox" ${p.enabled ? 'checked' : ''}
+          onchange="togglePolicy('${escHtml(p.name)}', this.checked)"
+          class="sr-only peer" />
+        <div class="w-9 h-5 bg-slate-700 rounded-full peer peer-checked:bg-indigo-600
+                    after:content-[''] after:absolute after:top-0.5 after:left-0.5
+                    after:bg-white after:rounded-full after:h-4 after:w-4
+                    after:transition-all peer-checked:after:translate-x-4"></div>
+      </label>
+    </div>`).join('');
+}
+
+function addFeedItem(msg, type='info') {
+  const feed = document.getElementById('live-feed');
+  const colors = { block:'text-red-400', warn:'text-amber-400', ok:'text-green-400', info:'text-slate-400' };
+  const item = document.createElement('div');
+  item.className = `slide-in ${colors[type] || 'text-slate-400'} text-xs py-1 border-b border-slate-800/50`;
+  item.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  if (feed.children[0]?.textContent?.includes('Waiting')) feed.innerHTML = '';
+  feed.insertBefore(item, feed.firstChild);
+  while (feed.children.length > 50) feed.removeChild(feed.lastChild);
+}
+
+// ── Data loading ──────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const data = await fetch(`${API}/api/stats`).then(r => r.json());
+    document.getElementById('kpi-total').textContent  = data.total_events  || 0;
+    document.getElementById('kpi-blocked').textContent = data.blocked_events || 0;
+    document.getElementById('kpi-alerted').textContent = data.alerted_events || 0;
+    if (data.asm_item_count !== undefined)
+      document.getElementById('kpi-asm').textContent = data.asm_item_count;
+    if (data.asm_risk_score !== undefined)
+      document.getElementById('kpi-risk-val').textContent = data.asm_risk_score;
+
+    // Activity chart
+    if (activityChart && data.events_by_hour) {
+      activityChart.data.datasets[0].data = data.events_by_hour;
+      activityChart.update('none');
+    }
+
+    // Type donut
+    if (typeChart && data.events_by_type) {
+      const keys = ['llm_api','agent_framework','mcp_server','ai_tool','unknown'];
+      typeChart.data.datasets[0].data = keys.map(k => data.events_by_type[k] || 0);
+      typeChart.update('none');
+    }
+  } catch(e) {}
+}
+
+async function loadDLPEvents() {
+  try {
+    const data = await fetch(`${API}/api/dlp/events?limit=100`).then(r => r.json());
+    dlpEvents = data;
+    renderDLPTable();
+  } catch(e) {}
+}
+
+async function loadPolicies() {
+  try {
+    const data = await fetch(`${API}/api/policies`).then(r => r.json());
+    renderPolicies(data);
+  } catch(e) {}
+}
+
+async function loadASM() {
+  try {
+    const data = await fetch(`${API}/api/asm`).then(r => r.json());
+    handleASMUpdate(data);
+  } catch(e) {}
+}
+
+async function loadNetworkEvents() {
+  try {
+    const data = await fetch(`${API}/api/network/events`).then(r => r.json());
+    netEvents = data;
+    renderNetList();
+  } catch(e) {}
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+async function triggerScan() {
+  await fetch(`${API}/api/asm/scan`, { method:'POST' });
+  addFeedItem('ASM scan triggered', 'info');
+  setTimeout(loadASM, 3000);
+}
+
+async function togglePolicy(name, enabled) {
+  await fetch(`${API}/api/policies/${encodeURIComponent(name.replace(/ /g,'_'))}`, {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ enabled })
+  });
+  addFeedItem(`Policy "${name}" ${enabled ? 'enabled' : 'disabled'}`, enabled ? 'ok' : 'warn');
+}
+
+async function runInspect() {
+  const url  = document.getElementById('insp-url').value.trim();
+  const body = document.getElementById('insp-body').value.trim();
+  const proc = document.getElementById('insp-proc').value.trim();
+  if (!url) return;
+  const result = await fetch(`${API}/api/dlp/inspect`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ url, body: body||null, source_process: proc||null })
+  }).then(r => r.json());
+  const el = document.getElementById('insp-result');
+  el.classList.remove('hidden');
+  el.textContent = JSON.stringify(result, null, 2);
+}
+
+function closeModal() {
+  document.getElementById('inspect-modal').classList.add('hidden');
+  document.getElementById('insp-result').classList.add('hidden');
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+    btn.classList.add('tab-active');
+    document.getElementById(`tab-${btn.dataset.tab}`).classList.remove('hidden');
+  });
+});
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function escHtml(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function shortUrl(url) {
+  try { const u = new URL(url); return u.hostname + u.pathname.slice(0,30); }
+  catch { return url.slice(0,40); }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+initCharts();
+connectWS();
+loadStats();
+loadDLPEvents();
+loadPolicies();
+loadASM();
+loadNetworkEvents();
+setInterval(loadStats, 30000);
+setInterval(loadDLPEvents, 15000);
+</script>
+</body>
+</html>
