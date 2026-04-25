@@ -41,6 +41,7 @@ _background_tasks: List[asyncio.Task] = []
 # ── WebSocket broadcast ───────────────────────────────────────────────────────
 
 async def _broadcast(msg_type: str, data: Any) -> None:
+    global _ws_clients
     if not _ws_clients:
         return
     payload = json.dumps({"type": msg_type, "data": data, "timestamp": time.time()})
@@ -50,7 +51,7 @@ async def _broadcast(msg_type: str, data: Any) -> None:
             await ws.send_text(payload)
         except Exception:
             dead.add(ws)
-    _ws_clients -= dead
+    _ws_clients.difference_update(dead)
 
 
 # ── Background tasks ──────────────────────────────────────────────────────────
@@ -174,7 +175,7 @@ if os.path.isdir(_static_dir):
 async def serve_dashboard():
     index_path = os.path.join(_dashboard_dir, "index.html")
     if os.path.exists(index_path):
-        with open(index_path) as f:
+        with open(index_path, encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
     return HTMLResponse("<h1>Dashboard not found. Build the frontend first.</h1>")
 
