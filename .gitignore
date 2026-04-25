@@ -10,3 +10,4 @@ config/ca-key.pem
 .venv/
 dist/
 *.egg-info/
+config/auth.json

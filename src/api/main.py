@@ -7,9 +7,11 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Cookie, FastAPI, Form, HTTPException, WebSocket, WebSocketDisconnect
+
+_SESSION_TTL = 8 * 3600
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import aiosqlite
 
@@ -24,6 +26,11 @@ from ..agent.process_monitor import ProcessMonitor
 from ..dlp.engine import DLPEngine, InspectionRequest
 from ..dlp.policy import PolicyEngine, PolicyAction
 from ..dlp.patterns import DataCategory, Severity
+from ..auth.auth import (
+    check_admin_password, create_session, validate_session,
+    invalidate_session, is_password_set, LOGIN_HTML,
+)
+from ..license.license import check_license_on_startup
 
 
 # ── Global state ──────────────────────────────────────────────────────────────
@@ -36,6 +43,7 @@ _policy_engine = _dlp_engine.get_policy_engine()
 _ws_clients: Set[WebSocket] = set()
 _asm_surface: Optional[Dict] = None
 _background_tasks: List[asyncio.Task] = []
+_license_info: Optional[Dict] = None
 
 
 # ── WebSocket broadcast ───────────────────────────────────────────────────────
@@ -128,6 +136,20 @@ def _on_process_event(event) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _license_info
+    lic = check_license_on_startup()
+    _license_info = {
+        "valid": lic.valid,
+        "company": lic.company,
+        "expiry": str(lic.expiry),
+        "days_remaining": lic.days_remaining,
+        "error": lic.error,
+    }
+    if not lic.valid:
+        import logging
+        logging.getLogger("bigsleep.agent").warning(
+            f"LICENSE: {lic.error} — running in TRIAL mode (30-day limit)"
+        )
     await init_db()
     _net_monitor.on_event(_on_network_event)
     _proc_monitor.on_event(_on_process_event)
@@ -169,15 +191,48 @@ if os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
+# ── Login / Logout routes ─────────────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(next: str = "/"):
+    html = LOGIN_HTML.replace("{next_url}", next).replace("{error_block}", "")
+    return HTMLResponse(html)
+
+
+@app.post("/login")
+async def login_submit(password: str = Form(...), next: str = Form(default="/")):
+    if not is_password_set():
+        err = '<div class="bg-red-900/40 border border-red-700 rounded-lg p-3 text-red-300 text-sm mb-4">No admin password set. Run: <code>python run.py setup</code></div>'
+        return HTMLResponse(LOGIN_HTML.replace("{next_url}", next).replace("{error_block}", err))
+    if not check_admin_password(password):
+        err = '<div class="bg-red-900/40 border border-red-700 rounded-lg p-3 text-red-300 text-sm mb-4">Incorrect password. Please try again.</div>'
+        return HTMLResponse(LOGIN_HTML.replace("{next_url}", next).replace("{error_block}", err), status_code=401)
+    token = create_session()
+    response = RedirectResponse(url=next, status_code=303)
+    response.set_cookie("bs_session", token, httponly=True, samesite="lax", max_age=_SESSION_TTL)
+    return response
+
+
+@app.get("/logout")
+async def logout(bs_session: Optional[str] = None):
+    if bs_session:
+        invalidate_session(bs_session)
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("bs_session")
+    return response
+
+
 # ── Dashboard route ───────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_dashboard():
+async def serve_dashboard(bs_session: Optional[str] = None):
+    if is_password_set() and not validate_session(bs_session):
+        return RedirectResponse(url="/login?next=/", status_code=307)
     index_path = os.path.join(_dashboard_dir, "index.html")
     if os.path.exists(index_path):
         with open(index_path, encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
-    return HTMLResponse("<h1>Dashboard not found. Build the frontend first.</h1>")
+    return HTMLResponse("<h1>Dashboard not found.</h1>")
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -356,6 +411,13 @@ async def get_process_events(limit: int = 100):
     ]
 
 
+# ── License endpoint ──────────────────────────────────────────────────────────
+
+@app.get("/api/license")
+async def get_license():
+    return _license_info or {"valid": False, "error": "Not loaded yet"}
+
+
 # ── Health endpoint ───────────────────────────────────────────────────────────
 
 @app.get("/api/health")
@@ -365,6 +427,7 @@ async def health():
         "version": "1.0.0",
         "timestamp": time.time(),
         "ws_clients": len(_ws_clients),
+        "license_valid": (_license_info or {}).get("valid", False),
     }
 
 
